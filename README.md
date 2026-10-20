@@ -1,9 +1,11 @@
-# Daily AI Brief — public episode delivery
+# Daily AI Brief public publisher
 
-Candidate feed: https://oliverbose.github.io/ai-daily-brief-pages/feed.xml
+Feed: https://oliverbose.github.io/ai-daily-brief-pages/feed.xml
 
-This repository holds a minimal manual migration workflow for testing GitHub Pages audio delivery. It copies the latest three real editions from the current public feed, preserves their audio bytes and GUIDs, and excludes the test episode. It does not generate speech or run on a daily schedule.
+This repository owns the sole production workflow. The application and narration inbox remain in the private source repository. Only the complete verified three-episode site is uploaded to Pages. No transcripts, private application files, credentials or speech chunks are public artifacts. MP3s are never committed.
 
-Audio is held only in the deployed Pages site and the normal one-day deployment artifact. MP3 files are never committed. The private application and narration inbox remain private; this trial requires no source credential or OpenAI key.
+The workflow is gated by `PUBLISHING_ENABLED=true`. Configure `PRIVATE_SOURCE_READ_TOKEN` (fine-grained access to the private source repository, Contents: read only) and `OPENAI_API_KEY` as encrypted Actions secrets. The application checkout is pinned to a reviewed commit; the day's input checkout is independently pinned when fetched. Keep the migration trial workflow retired when activating production.
 
-Run **Pages playback trial** manually from Actions. Playback and seeking must be verified at the Pages URL and on Playrun/Garmin before production transfer. Netlify remains the working publisher during this trial.
+One timezone-aware schedule runs at 08:30 Europe/Berlin. Pushes do not publish. Use manual dispatch for late narration or recovery, with a reason. A historical report also requires `historical=true`. To reuse a completed deployment artifact, supply its `recovery_run_id`; speech is not called. Without an artifact, explicitly select `allow_regeneration` because paid work may repeat. Artifacts have one-day retention and are not backups.
+
+Latest three successful report dates are retained; older enclosure links can stop working. Check GitHub failure notifications and workflow runs. Public repository schedules may be disabled after 60 days without repository activity. There is no independent watchdog. Playrun Playlist insertion remains manual; verify Garmin synchronization separately.

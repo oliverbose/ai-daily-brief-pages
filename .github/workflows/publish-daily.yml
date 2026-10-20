@@ -1,0 +1,183 @@
+name: Publish Daily AI Brief
+on:
+  schedule:
+    - cron: '30 8 * * *'
+      timezone: Europe/Berlin
+  workflow_dispatch:
+    inputs:
+      date:
+        description: Report date, YYYY-MM-DD (blank means today in Berlin)
+        type: string
+      reason:
+        description: Recovery reason (required for all manual invocations)
+        type: string
+        required: true
+      historical:
+        description: Explicitly allow an older report date
+        type: boolean
+        default: false
+      recovery_run_id:
+        description: Reuse this completed run's Pages artifact; makes no speech calls
+        type: string
+      allow_regeneration:
+        description: Allow speech if matching live audio is absent (repeat charges are possible)
+        type: boolean
+        default: false
+permissions:
+  contents: read
+concurrency:
+  group: pages-publisher
+  cancel-in-progress: false
+jobs:
+  publish:
+    if: github.ref == 'refs/heads/main' && vars.PUBLISHING_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      actions: read
+      deployments: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    env:
+      SITE: https://oliverbose.github.io/ai-daily-brief-pages
+      PYTHONPATH: ${{ github.workspace }}/_private/code/src
+    steps:
+      - name: Check operator intent and configuration
+        env:
+          EVENT: ${{ github.event_name }}
+          ATTEMPT: ${{ github.run_attempt }}
+          REASON: ${{ inputs.reason }}
+          RECOVERY: ${{ inputs.recovery_run_id }}
+          REGENERATE: ${{ inputs.allow_regeneration }}
+          SOURCE_TOKEN: ${{ secrets.PRIVATE_SOURCE_READ_TOKEN }}
+        run: |
+          python3 - <<'PY'
+          import os
+          if not os.environ['SOURCE_TOKEN']:
+              raise SystemExit('PRIVATE_SOURCE_READ_TOKEN is missing; no build or speech started')
+          if os.environ['EVENT'] == 'schedule' and int(os.environ['ATTEMPT']) > 1:
+              raise SystemExit('Use manual recovery dispatch: rerunning a scheduled job may repeat paid speech')
+          if os.environ['EVENT'] == 'workflow_dispatch':
+              if not os.environ['REASON'].strip():
+                  raise SystemExit('Manual recovery requires a reason')
+              if not os.environ['RECOVERY'] and os.environ['REGENERATE'] != 'true':
+                  raise SystemExit('Choose an artifact run ID or explicitly allow possible speech regeneration')
+          PY
+      - name: Fetch reviewed private application commit
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: oliverbose/ai-daily-brief
+          ref: 9ee3960969ce5102a7ab58ed710e6c79d12c5108
+          token: ${{ secrets.PRIVATE_SOURCE_READ_TOKEN }}
+          path: _private/code
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - run: sudo apt-get update && sudo apt-get install --yes ffmpeg
+      - name: Reconcile prior provider deployments before any speech
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python -m daily_brief guard --repository "$GITHUB_REPOSITORY"
+      - name: Pin the current private input checkout
+        if: inputs.recovery_run_id == ''
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: oliverbose/ai-daily-brief
+          ref: main
+          token: ${{ secrets.PRIVATE_SOURCE_READ_TOKEN }}
+          path: _private/input
+          persist-credentials: false
+      - name: Build or recover a complete site
+        id: build
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GH_TOKEN: ${{ github.token }}
+          REPORT_DATE: ${{ inputs.date }}
+          REASON: ${{ inputs.reason }}
+          HISTORICAL: ${{ inputs.historical }}
+          RECOVERY_RUN: ${{ inputs.recovery_run_id }}
+        run: |
+          python - <<'PY'
+          import json, os, subprocess, sys
+          from daily_brief.cli import main
+          args = ['--site', os.environ['SITE'], '--output', 'public-site', '--receipt', 'build-receipt.json']
+          if os.environ['RECOVERY_RUN']:
+              command = ['recover', '--repository', os.environ['GITHUB_REPOSITORY'], '--run-id', os.environ['RECOVERY_RUN'], *args]
+          else:
+              from daily_brief.jobs import load, today
+              day = os.environ['REPORT_DATE'] or today().isoformat()
+              print(json.dumps(load('_private/input/inbox/' + day + '.json').receipt(), sort_keys=True))
+              command = ['build', '--inbox', '_private/input/inbox', *args]
+              if os.environ['REPORT_DATE']:
+                  command += ['--date', os.environ['REPORT_DATE']]
+              if os.environ['HISTORICAL'] == 'true':
+                  command += ['--historical', '--reason', os.environ['REASON']]
+          code = main(command)
+          if code:
+              raise SystemExit(code)
+          receipt = json.load(open('build-receipt.json'))
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('candidate=' + str(receipt['status'] != 'already-published').lower() + '\n')
+          PY
+      - name: Recheck provider and live site before deployment
+        if: steps.build.outputs.candidate == 'true'
+        id: ready
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HISTORICAL: ${{ inputs.historical }}
+          REASON: ${{ inputs.reason }}
+        run: |
+          python -m daily_brief guard --repository "$GITHUB_REPOSITORY"
+          python - <<'PY'
+          import os
+          from daily_brief.cli import main
+          args = ['ready', '--site', os.environ['SITE'], '--expected', 'public-site', '--receipt', 'build-receipt.json']
+          if os.environ['HISTORICAL'] == 'true':
+              args += ['--historical', '--reason', os.environ['REASON']]
+          raise SystemExit(main(args))
+          PY
+      - uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5
+        if: steps.ready.outputs.deploy == 'true'
+      - name: Upload only the verified public site
+        if: steps.ready.outputs.deploy == 'true'
+        uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v4
+        with:
+          path: public-site
+          retention-days: 1
+      - name: Final date and snapshot check after artifact upload
+        if: steps.ready.outputs.deploy == 'true'
+        id: final
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HISTORICAL: ${{ inputs.historical }}
+          REASON: ${{ inputs.reason }}
+        run: |
+          python -m daily_brief guard --repository "$GITHUB_REPOSITORY"
+          python - <<'PY'
+          import os
+          from daily_brief.cli import main
+          args = ['ready', '--site', os.environ['SITE'], '--expected', 'public-site', '--receipt', 'build-receipt.json']
+          if os.environ['HISTORICAL'] == 'true':
+              args += ['--historical', '--reason', os.environ['REASON']]
+          raise SystemExit(main(args))
+          PY
+      - name: Deploy to GitHub Pages
+        if: steps.final.outputs.deploy == 'true'
+        id: deployment
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4
+      - name: Verify live RSS, catalog, MP3s and byte ranges
+        if: steps.final.outputs.deploy == 'true'
+        run: python -m daily_brief verify --site "$SITE" --expected public-site --attempts 12
+      - name: Explain recovery and delivery status
+        if: always()
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" <<'TEXT'
+          Speech retries are limited per invocation: two attempts per chunk and three extra attempts overall. Runner loss can require paid regeneration. For a deploy-only failure, reuse the one-day Pages artifact with recovery_run_id before considering speech regeneration. Expired artifacts are not guaranteed recoverable.
+
+          Playrun Playlist insertion remains manual. RSS success does not establish watch delivery. Public-repository schedules can be disabled after 60 days without repository activity; check scheduling regularly.
+          TEXT
