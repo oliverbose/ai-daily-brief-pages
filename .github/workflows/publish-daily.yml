@@ -1,0 +1,115 @@
+name: Publish Daily AI Brief
+on:
+  push:
+    branches: [main]
+    paths: ['requests/*.json']
+  schedule:
+    - cron: '30 8 * * *'
+      timezone: Europe/Berlin
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: pages-publisher
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      deployments: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    env:
+      SITE: https://oliverbose.github.io/ai-daily-brief-pages
+      PYTHONPATH: ${{ github.workspace }}/_private/code/src
+    steps:
+      - name: Check out public publication requests
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Fetch pinned private application
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: oliverbose/ai-daily-brief
+          ref: cf1bbce243405c6c09e81a3c93195e24bc566c81
+          ssh-key: ${{ secrets.PRIVATE_SOURCE_READ_KEY }}
+          path: _private/code
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - name: Select immutable narration request
+        id: request
+        run: python -m daily_brief.request requests
+      - name: Fetch narration
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: oliverbose/ai-daily-brief
+          ref: ${{ steps.request.outputs.ref }}
+          ssh-key: ${{ secrets.PRIVATE_SOURCE_READ_KEY }}
+          path: _private/input
+          persist-credentials: false
+      - run: sudo apt-get update && sudo apt-get install --yes ffmpeg
+      - name: Install pinned CPU speech dependencies
+        run: python -m pip install -r _private/code/requirements-tts.txt
+      - name: Reconcile previous deployments
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python -m daily_brief guard --repository "$GITHUB_REPOSITORY"
+      - name: Build with bounded automatic retries
+        id: build
+        env:
+          REPORT_DATE: ${{ steps.request.outputs.date }}
+        run: |
+          python - <<'PYTHON'
+          import json, os, time
+          from pathlib import Path
+          from daily_brief.cli import main
+          args = ['build', '--inbox', '_private/input/inbox', '--date', os.environ['REPORT_DATE'],
+                  '--site', os.environ['SITE'], '--output', 'public-site', '--receipt', 'build-receipt.json',
+                  '--historical', '--reason', 'automatic bounded catch-up']
+          for attempt in range(3):
+              if main(args) == 0:
+                  break
+              if attempt == 2:
+                  raise SystemExit('Build failed after three automatic attempts')
+              time.sleep(30 * (attempt + 1))
+          receipt = json.loads(Path('build-receipt.json').read_text())
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as out:
+              out.write('candidate=' + str(receipt['status'] != 'already-published').lower() + '\n')
+          PYTHON
+      - name: Recheck live snapshot
+        if: steps.build.outputs.candidate == 'true'
+        id: ready
+        run: python -m daily_brief ready --site "$SITE" --expected public-site --receipt build-receipt.json --historical --reason 'automatic bounded catch-up'
+      - uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5
+        if: steps.ready.outputs.deploy == 'true'
+      - name: Upload only the verified public site
+        if: steps.ready.outputs.deploy == 'true'
+        uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v4
+        with:
+          path: public-site
+          retention-days: 1
+      - name: Final snapshot check
+        if: steps.ready.outputs.deploy == 'true'
+        id: final
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python -m daily_brief guard --repository "$GITHUB_REPOSITORY"
+          python -m daily_brief ready --site "$SITE" --expected public-site --receipt build-receipt.json --historical --reason 'automatic bounded catch-up'
+      - name: Deploy to GitHub Pages
+        if: steps.final.outputs.deploy == 'true'
+        id: deployment
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4
+      - name: Verify live RSS, catalog, MP3s and byte ranges
+        if: steps.final.outputs.deploy == 'true'
+        run: python -m daily_brief verify --site "$SITE" --expected public-site --attempts 12
+      - name: Record delivery boundary
+        if: always()
+        run: echo 'CPU speech uses no metered inference API. Publication is verified separately from native podcast-service discovery and physical watch sync.' >> "$GITHUB_STEP_SUMMARY"
