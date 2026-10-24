@@ -1,9 +1,7 @@
-# Daily AI Brief — public episode delivery
+# Daily AI Brief public publisher
 
-Candidate feed: https://oliverbose.github.io/ai-daily-brief-pages/feed.xml
+[Podcast RSS](https://oliverbose.github.io/ai-daily-brief-pages/feed.xml)
 
-This repository holds a minimal manual migration workflow for testing GitHub Pages audio delivery. It copies the latest three real editions from the current public feed, preserves their audio bytes and GUIDs, and excludes the test episode. It does not generate speech or run on a daily schedule.
+A verified private narration commit is referenced by `requests/YYYY-MM-DD.json`. Request pushes trigger CPU-only Kokoro synthesis and a validated Pages deployment retaining three editions. One daily reconciliation run repairs a missed request. The private application stays private and is checked out using a read-only deploy key stored as an encrypted Actions secret.
 
-Audio is held only in the deployed Pages site and the normal one-day deployment artifact. MP3 files are never committed. The private application and narration inbox remain private; this trial requires no source credential or OpenAI key.
-
-Run **Pages playback trial** manually from Actions. Playback and seeking must be verified at the Pages URL and on Playrun/Garmin before production transfer. Netlify remains the working publisher during this trial.
+No OpenAI speech API key or local computer is used. Narration and source code are not uploaded as build artifacts. See the private repository CLOUD-SETUP.md for operations. RSS publication does not by itself prove device delivery.
