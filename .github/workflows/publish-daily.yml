@@ -41,7 +41,7 @@ jobs:
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           repository: oliverbose/ai-daily-brief
-          ref: 3c88f9c7f2236dc1f1295b470b4ed87479b0ce4c
+          ref: c85598ded0b1fab36b39336abf27925fb1a12a46
           ssh-key: ${{ secrets.PRIVATE_SOURCE_READ_KEY }}
           path: _private/code
           persist-credentials: false
