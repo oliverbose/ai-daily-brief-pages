@@ -41,7 +41,7 @@ jobs:
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           repository: oliverbose/ai-daily-brief
-          ref: a3781df0faa6c4fcef8dfb7d1be1b28681c9f28e
+          ref: a496f7140cdf64fcd0f1a6b2fd4c71bddb3ceb25
           ssh-key: ${{ secrets.PRIVATE_SOURCE_READ_KEY }}
           path: _private/code
           persist-credentials: false
@@ -52,6 +52,7 @@ jobs:
         id: request
         env:
           REPORT_DATE: ${{ inputs.date }}
+          GH_TOKEN: ${{ github.token }}
         run: python -m daily_brief.request requests
       - name: Fetch narration
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
