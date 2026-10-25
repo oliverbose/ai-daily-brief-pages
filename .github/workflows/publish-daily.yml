@@ -22,6 +22,7 @@ jobs:
     timeout-minutes: 45
     permissions:
       contents: read
+      actions: read
       deployments: read
       pages: write
       id-token: write
@@ -40,7 +41,7 @@ jobs:
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           repository: oliverbose/ai-daily-brief
-          ref: 04b42b2bc3616df73c4b6a09008b599945383f93
+          ref: 3c88f9c7f2236dc1f1295b470b4ed87479b0ce4c
           ssh-key: ${{ secrets.PRIVATE_SOURCE_READ_KEY }}
           path: _private/code
           persist-credentials: false
